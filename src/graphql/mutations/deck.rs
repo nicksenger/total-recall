@@ -20,7 +20,6 @@ use crate::{
 #[derive(GraphQLInputObject, Clone, Debug)]
 pub struct NewDeck {
   name: String,
-  owner: i32,
   language: i32,
 }
 
@@ -34,19 +33,11 @@ impl HandleInsert<Deck, NewDeck, Pg, GQLContext<DBConnection>> for decks::table 
     let conn = ctx.get_connection();
     conn.transaction(|| match ctx.user_id {
       Some(id) => {
-        if id != insertable.owner {
-          return Err(FieldError::new(
-            "Creating decks for other users is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        }
         let look_ahead = executor.look_ahead();
         let inserted = diesel::insert_into(decks::table)
           .values((
             decks::name.eq(insertable.name),
-            decks::owner.eq(insertable.owner),
+            decks::owner.eq(id),
             decks::language.eq(insertable.language),
           ))
           .returning(decks::id)
@@ -78,29 +69,16 @@ impl HandleBatchInsert<Deck, NewDeck, Pg, GQLContext<DBConnection>> for decks::t
     conn.transaction(|| match ctx.user_id {
       Some(id) => {
         let look_ahead = executor.look_ahead();
-
-        for deck in &insertable {
-          if id != deck.owner {
-            return Err(FieldError::new(
-              "Creating decks for other users is forbidden.",
-              graphql_value!({
-                  "type": "UNAUTHORIZED"
-              }),
-            ));
-          }
-        }
-
         let insert = insertable
           .into_iter()
           .map(
             |NewDeck {
                name,
-               owner,
                language,
              }| {
               (
                 decks::name.eq(name),
-                decks::owner.eq(owner),
+                decks::owner.eq(id),
                 decks::language.eq(language),
               )
             },

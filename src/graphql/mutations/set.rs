@@ -22,7 +22,6 @@ use crate::{
 pub struct NewSet {
   name: String,
   deck: i32,
-  owner: i32,
   cards: Vec<i32>,
 }
 
@@ -36,21 +35,13 @@ impl HandleInsert<Set, NewSet, Pg, GQLContext<DBConnection>> for sets::table {
     let conn = ctx.get_connection();
     conn.transaction(|| match ctx.user_id {
       Some(id) => {
-        if id != insertable.owner {
-          return Err(FieldError::new(
-            "Creating sets for other users is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        }
         let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
         let look_ahead = executor.look_ahead();
         let inserted = diesel::insert_into(sets::table)
           .values((
             sets::name.eq(insertable.name),
             sets::deck.eq(insertable.deck),
-            sets::owner.eq(insertable.owner),
+            sets::owner.eq(id),
             sets::created_at.eq(time),
           ))
           .returning(sets::id)
@@ -98,18 +89,6 @@ impl HandleBatchInsert<Set, NewSet, Pg, GQLContext<DBConnection>> for sets::tabl
     conn.transaction(|| match ctx.user_id {
       Some(id) => {
         let look_ahead = executor.look_ahead();
-
-        for set in &insertable {
-          if id != set.owner {
-            return Err(FieldError::new(
-              "Creating sets for other users is forbidden.",
-              graphql_value!({
-                  "type": "UNAUTHORIZED"
-              }),
-            ));
-          }
-        }
-
         let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
         let mut card_ids = vec![];
         let insert = insertable
@@ -118,14 +97,13 @@ impl HandleBatchInsert<Set, NewSet, Pg, GQLContext<DBConnection>> for sets::tabl
             |NewSet {
                name,
                deck,
-               owner,
                cards,
              }| {
               card_ids.push(cards);
               (
                 sets::name.eq(name),
                 sets::deck.eq(deck),
-                sets::owner.eq(owner),
+                sets::owner.eq(id),
                 sets::created_at.eq(time),
               )
             },
