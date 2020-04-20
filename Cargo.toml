@@ -1,0 +1,37 @@
+[package]
+name = "total_recall"
+version = "0.1.0"
+authors = ["Nick <dev@nsenger.com>"]
+edition = "2018"
+autobins = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+actix-files = "0.2.1"
+actix-web = "2.0.0"
+actix-rt = "1.1.0"
+bcrypt = "0.7.0"
+diesel = { version = "1.4", features = ["postgres", "r2d2"] }
+diesel_migrations = "1.4.0"
+failure = "0.1.2"
+google_translate_tts = "0.1.2"
+jsonwebtoken = "5.0.1"
+juniper = "0.14"
+reqwest = "0.9.24"
+sanitize-filename = "0.2.1"
+select = "0.4.3"
+serde = "^1"
+serde_json = "^1"
+serde_derive = "^1"
+structopt = "0.3"
+wundergraph = { version = "0.1.2", features = ["postgres"]}
+
+
+[lib]
+name = "total_recall"
+path = "src/lib.rs"
+
+[[bin]]
+name = "total_recall"
+path = "src/main.rs"
