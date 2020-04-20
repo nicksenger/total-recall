@@ -2,6 +2,7 @@ extern crate total_recall;
 
 use actix_files::Files;
 use actix_web::{
+    middleware::Logger,
     web::{get, post},
     App, HttpServer,
 };
@@ -30,6 +31,7 @@ struct Opt {
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
+    env_logger::init();
     let manager = ConnectionManager::<DBConnection>::new(opt.database_url);
     let pool = Pool::builder()
         .build(manager)
@@ -50,6 +52,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .data(data.clone())
+            .wrap(Logger::default())
             .route("/login", post().to(login))
             .route("/graphql", post().to(graphql))
             .route("/graphiql", get().to(graphiql))
