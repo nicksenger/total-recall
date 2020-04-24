@@ -11,7 +11,7 @@ use wundergraph::{
   WundergraphContext,
 };
 
-use super::utilities::{get_audio_from_google, get_image_from_google};
+use super::utilities::{get_audio_from_google, get_image_from_google, TRCError};
 use crate::{
   db::{
     schema::{backs, cards, decks, languages},
@@ -19,6 +19,17 @@ use crate::{
   },
   graphql::{query::Card, GQLContext},
 };
+
+impl From<TRCError> for ExecutionResult {
+  fn from(err: TRCError) -> ExecutionResult {
+    Err(FieldError::new(
+      format!("{}", err.to_string()),
+      graphql_value!({
+          "type": "INTERNAL"
+      }),
+    ))
+  }
+}
 
 #[derive(GraphQLInputObject, Clone, Debug)]
 pub struct NewCard {
