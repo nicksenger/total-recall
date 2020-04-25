@@ -32,10 +32,9 @@ pub fn encode_jwt(user_id: i32, exp_day: i32) -> Result<String, jwt::errors::Err
         .expect("Time went backwards")
         .as_secs() as i32
         + exp_day * 24 * 60 * 60;
+
     let jwt_secret_key = SecretKey::get_secret_key();
-
     let my_claims = Claims { user_id, exp };
-
     let token = encode(&Header::default(), &my_claims, jwt_secret_key.key.as_ref())?;
 
     Ok(token)
@@ -43,26 +42,7 @@ pub fn encode_jwt(user_id: i32, exp_day: i32) -> Result<String, jwt::errors::Err
 
 pub fn verify_jwt(token: String) -> Result<jwt::TokenData<Claims>, jwt::errors::Error> {
     let jwt_secret_key = SecretKey::get_secret_key();
-
     let validation = Validation::default();
 
-    match decode::<Claims>(&token, jwt_secret_key.key.as_ref(), &validation) {
-        Ok(c) => Ok(c),
-        Err(err) => Err(err),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn verify_token() {
-        let token = match encode_jwt(1, 30) {
-            Ok(t) => t,
-            _ => return println!("Test failed!"),
-        };
-        println!("token: {:?}", &token);
-        println!("output: {:?}", verify_jwt(token))
-    }
+    decode::<Claims>(&token, jwt_secret_key.key.as_ref(), &validation)
 }

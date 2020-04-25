@@ -18,6 +18,7 @@ use crate::{
     DBConnection,
   },
   graphql::{query::Card, GQLContext},
+  TRCError,
 };
 
 #[derive(GraphQLInputObject, Clone, Debug)]
@@ -36,74 +37,47 @@ impl HandleInsert<Card, NewCard, Pg, GQLContext<DBConnection>> for cards::table 
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let (abbr, (target_user_id, language)) = decks::table
-          .inner_join(languages::table)
-          .select((languages::abbreviation, (decks::owner, decks::language)))
-          .filter(decks::id.eq(insertable.deck))
-          .get_result::<(String, (i32, i32))>(conn)?;
-
-        if id != target_user_id {
-          return Err(FieldError::new(
-            "Creating cards for other users is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        }
-        let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
-        let look_ahead = executor.look_ahead();
-
-        let sanitized = sanitize(&insertable.back);
-        match get_audio_from_google(&abbr, &insertable.back, &sanitized) {
-          Ok(_) => match get_image_from_google(&abbr, &insertable.back, &sanitized) {
-            Ok(_) => {
-              let inserted_back = diesel::insert_into(backs::table)
-                .values((
-                  backs::text.eq(insertable.back),
-                  backs::language.eq(language),
-                  backs::image.eq(Some(format!("images/{}/{}.jpg", &abbr, &sanitized))),
-                  backs::audio.eq(Some(format!("audio/{}/{}.mp3", &abbr, &sanitized))),
-                ))
-                .returning(backs::id)
-                .get_result::<i32>(conn)?;
-              let inserted = diesel::insert_into(cards::table)
-                .values((
-                  cards::front.eq(insertable.front),
-                  cards::deck.eq(insertable.deck),
-                  cards::link.eq(insertable.link),
-                  cards::created_at.eq(time),
-                  cards::back.eq(inserted_back),
-                ))
-                .returning(cards::id)
-                .get_result::<i32>(conn)?;
-              let query = <Card as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-                .filter(cards::id.eq(inserted));
-              let items = Card::load(&look_ahead, selection, executor, query)?;
-              Ok(items.into_iter().next().unwrap_or(Value::Null))
-            }
-            _ => Err(FieldError::new(
-              "Failed retrieve card image.",
-              graphql_value!({
-                  "type": "INTERNAL"
-              }),
-            )),
-          },
-          _ => Err(FieldError::new(
-            "Failed retrieve card audio.",
-            graphql_value!({
-                "type": "INTERNAL"
-            }),
-          )),
-        }
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let (abbr, (target_user_id, language)) = decks::table
+        .inner_join(languages::table)
+        .select((languages::abbreviation, (decks::owner, decks::language)))
+        .filter(decks::id.eq(insertable.deck))
+        .get_result::<(String, (i32, i32))>(conn)?;
+      if id != target_user_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
       }
-      None => Err(FieldError::new(
-        "You must be logged in to create a card.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+
+      let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+      let look_ahead = executor.look_ahead();
+      let sanitized = sanitize(&insertable.back);
+
+      get_audio_from_google(&abbr, &insertable.back, &sanitized)?;
+      get_image_from_google(&abbr, &insertable.back, &sanitized)?;
+
+      let inserted_back = diesel::insert_into(backs::table)
+        .values((
+          backs::text.eq(insertable.back),
+          backs::language.eq(language),
+          backs::image.eq(Some(format!("images/{}/{}.jpg", &abbr, &sanitized))),
+          backs::audio.eq(Some(format!("audio/{}/{}.mp3", &abbr, &sanitized))),
+        ))
+        .returning(backs::id)
+        .get_result::<i32>(conn)?;
+      let inserted = diesel::insert_into(cards::table)
+        .values((
+          cards::front.eq(insertable.front),
+          cards::deck.eq(insertable.deck),
+          cards::link.eq(insertable.link),
+          cards::created_at.eq(time),
+          cards::back.eq(inserted_back),
+        ))
+        .returning(cards::id)
+        .get_result::<i32>(conn)?;
+      let query = <Card as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(cards::id.eq(inserted));
+      let items = Card::load(&look_ahead, selection, executor, query)?;
+      Ok(items.into_iter().next().unwrap_or(Value::Null))
     })
   }
 }
@@ -116,115 +90,73 @@ impl HandleBatchInsert<Card, NewCard, Pg, GQLContext<DBConnection>> for cards::t
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let look_ahead = executor.look_ahead();
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let look_ahead = executor.look_ahead();
 
-        let mut deck_ids = vec![];
-        for card in &insertable {
-          deck_ids.push(card.deck);
-        }
-
-        let deck_owners_languages = decks::table
-          .inner_join(languages::table)
-          .select((languages::abbreviation, (decks::owner, decks::language)))
-          .filter(decks::id.eq_any(deck_ids))
-          .get_results::<(String, (i32, i32))>(conn)?;
-
-        for (_, (owner, _)) in &deck_owners_languages {
-          if &id != owner {
-            return Err(FieldError::new(
-              "Creating cards for other users is forbidden.",
-              graphql_value!({
-                  "type": "UNAUTHORIZED"
-              }),
-            ));
-          }
-        }
-
-        let mut failed = false;
-        let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
-        let insert = insertable
-          .into_iter()
-          .enumerate()
-          .map(
-            |(
-              i,
-              NewCard {
-                front,
-                deck,
-                link,
-                back,
-              },
-            )| {
-              let sanitized = sanitize(&back);
-              let abbr = &deck_owners_languages[i].0;
-              let inserted_back = match get_audio_from_google(abbr, &back, &sanitized) {
-                Ok(_) => match get_image_from_google(abbr, &back, &sanitized) {
-                  Ok(_) => {
-                    match diesel::insert_into(backs::table)
-                      .values((
-                        backs::text.eq(back),
-                        backs::language.eq((deck_owners_languages[i].1).1),
-                        backs::image.eq(Some(format!("images/{}/{}.jpg", abbr, &sanitized))),
-                        backs::audio.eq(Some(format!("audio/{}/{}.mp3", abbr, &sanitized))),
-                      ))
-                      .returning(backs::id)
-                      .get_result::<i32>(conn)
-                    {
-                      Ok(i) => i,
-                      Err(_) => {
-                        failed = true;
-                        0
-                      }
-                    }
-                  }
-                  _ => {
-                    failed = true;
-                    0
-                  }
-                },
-                _ => {
-                  failed = true;
-                  0
-                }
-              };
-
-              (
-                cards::front.eq(front),
-                cards::deck.eq(deck),
-                cards::link.eq(link),
-                cards::created_at.eq(time),
-                cards::back.eq(inserted_back),
-              )
-            },
-          )
-          .collect::<Vec<_>>();
-        if failed {
-          return Err(FieldError::new(
-            "Error adding card.",
-            graphql_value!({
-                "type": "INTERNAL"
-            }),
-          ));
-        }
-
-        let inserted = diesel::insert_into(cards::table)
-          .values(insert)
-          .returning(cards::id)
-          .get_results::<i32>(conn)?;
-
-        let query = <Card as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(cards::id.eq_any(inserted));
-        let items = Card::load(&look_ahead, selection, executor, query)?;
-        Ok(Value::list(items))
+      let mut deck_ids = vec![];
+      for card in &insertable {
+        deck_ids.push(card.deck)
       }
-      None => Err(FieldError::new(
-        "You must be logged in to create cards.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+
+      let decks_owners_languages = decks::table
+        .inner_join(languages::table)
+        .select((languages::abbreviation, (decks::owner, decks::language)))
+        .filter(decks::id.eq_any(deck_ids))
+        .get_results::<(String, (i32, i32))>(conn)?;
+
+      for (_, (owner, _)) in &decks_owners_languages {
+        if &id != owner {
+          return ExecutionResult::from(TRCError::Unauthorized);
+        }
+      }
+
+      let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+
+      let mut insert = vec![];
+      for (
+        i,
+        NewCard {
+          front,
+          deck,
+          link,
+          back,
+        },
+      ) in insertable.into_iter().enumerate()
+      {
+        let sanitized = sanitize(&back);
+        let abbr = &decks_owners_languages[i].0;
+
+        get_audio_from_google(abbr, &back, &sanitized)?;
+        get_image_from_google(abbr, &back, &sanitized)?;
+        let inserted_back = diesel::insert_into(backs::table)
+          .values((
+            backs::text.eq(back),
+            backs::language.eq((decks_owners_languages[i].1).1),
+            backs::image.eq(Some(format!("images/{}/{}.jpg", abbr, &sanitized))),
+            backs::audio.eq(Some(format!("audio/{}/{}.mp3", abbr, &sanitized))),
+          ))
+          .returning(backs::id)
+          .get_result::<i32>(conn)?;
+
+        insert.push((
+          cards::front.eq(front),
+          cards::deck.eq(deck),
+          cards::link.eq(link),
+          cards::created_at.eq(time),
+          cards::back.eq(inserted_back),
+        ));
+      }
+
+      let inserted = diesel::insert_into(cards::table)
+        .values(insert)
+        .returning(cards::id)
+        .get_results::<i32>(conn)?;
+
+      let query = <Card as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(cards::id.eq_any(inserted));
+      let items = Card::load(&look_ahead, selection, executor, query)?;
+      Ok(Value::list(items))
     })
   }
 }
@@ -244,40 +176,28 @@ impl HandleUpdate<Card, CardChangeset, Pg, GQLContext<DBConnection>> for cards::
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let (owner_id, current_link) = cards::table
-          .filter(cards::id.eq(update.id))
-          .inner_join(decks::table)
-          .select((decks::owner, cards::link))
-          .get_result::<(i32, Option<String>)>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let (owner_id, current_link) = cards::table
+        .filter(cards::id.eq(update.id))
+        .inner_join(decks::table)
+        .select((decks::owner, cards::link))
+        .get_result::<(i32, Option<String>)>(conn)?;
 
-        if id != owner_id {
-          return Err(FieldError::new(
-            "Updating other users' cards is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        };
-
-        diesel::update(cards::table.filter(cards::id.eq(update.id)))
-          .set(cards::link.eq(update.link.as_ref().or(current_link.as_ref())))
-          .execute(conn)?;
-
-        let look_ahead = executor.look_ahead();
-
-        let query = <Card as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(cards::id.eq(update.id));
-        let items = Card::load(&look_ahead, selection, executor, query)?;
-        Ok(items.into_iter().next().unwrap_or(Value::Null))
+      if id != owner_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
       }
-      None => Err(FieldError::new(
-        "You must be logged in to update a card.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+
+      diesel::update(cards::table.filter(cards::id.eq(update.id)))
+        .set(cards::link.eq(update.link.as_ref().or(current_link.as_ref())))
+        .execute(conn)?;
+
+      let look_ahead = executor.look_ahead();
+
+      let query = <Card as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(cards::id.eq(update.id));
+      let items = Card::load(&look_ahead, selection, executor, query)?;
+      Ok(items.into_iter().next().unwrap_or(Value::Null))
     })
   }
 }
@@ -294,37 +214,25 @@ impl HandleDelete<Card, CardDeleteset, Pg, GQLContext<DBConnection>> for cards::
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let target_user_id = cards::table
-          .filter(cards::id.eq(to_delete.id))
-          .inner_join(decks::table)
-          .select(decks::owner)
-          .get_result::<i32>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let target_user_id = cards::table
+        .filter(cards::id.eq(to_delete.id))
+        .inner_join(decks::table)
+        .select(decks::owner)
+        .get_result::<i32>(conn)?;
 
-        if id != target_user_id {
-          return Err(FieldError::new(
-            "Deleting other users' cards is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        };
-
-        let d = diesel::delete(cards::table.filter(cards::id.eq(to_delete.id)));
-        executor.resolve_with_ctx(
-          &(),
-          &DeletedCount {
-            count: d.execute(conn)? as _,
-          },
-        )
+      if id != target_user_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
       }
-      None => Err(FieldError::new(
-        "You must be logged in to delete a card.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+
+      let d = diesel::delete(cards::table.filter(cards::id.eq(to_delete.id)));
+      executor.resolve_with_ctx(
+        &(),
+        &DeletedCount {
+          count: d.execute(conn)? as _,
+        },
+      )
     })
   }
 }

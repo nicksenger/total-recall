@@ -15,6 +15,7 @@ use crate::{
     DBConnection,
   },
   graphql::{query::Deck, GQLContext},
+  TRCError,
 };
 
 #[derive(GraphQLInputObject, Clone, Debug)]
@@ -31,29 +32,21 @@ impl HandleInsert<Deck, NewDeck, Pg, GQLContext<DBConnection>> for decks::table 
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let look_ahead = executor.look_ahead();
-        let inserted = diesel::insert_into(decks::table)
-          .values((
-            decks::name.eq(insertable.name),
-            decks::owner.eq(id),
-            decks::language.eq(insertable.language),
-          ))
-          .returning(decks::id)
-          .get_result::<i32>(conn)?;
-
-        let query = <Deck as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(decks::id.eq(inserted));
-        let items = Deck::load(&look_ahead, selection, executor, query)?;
-        Ok(items.into_iter().next().unwrap_or(Value::Null))
-      }
-      None => Err(FieldError::new(
-        "You must be logged in to create a deck.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let look_ahead = executor.look_ahead();
+      let inserted = diesel::insert_into(decks::table)
+        .values((
+          decks::name.eq(insertable.name),
+          decks::owner.eq(id),
+          decks::language.eq(insertable.language),
+        ))
+        .returning(decks::id)
+        .get_result::<i32>(conn)?;
+      let query = <Deck as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(decks::id.eq(inserted));
+      let items = Deck::load(&look_ahead, selection, executor, query)?;
+      Ok(items.into_iter().next().unwrap_or(Value::Null))
     })
   }
 }
@@ -66,41 +59,28 @@ impl HandleBatchInsert<Deck, NewDeck, Pg, GQLContext<DBConnection>> for decks::t
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let look_ahead = executor.look_ahead();
-        let insert = insertable
-          .into_iter()
-          .map(
-            |NewDeck {
-               name,
-               language,
-             }| {
-              (
-                decks::name.eq(name),
-                decks::owner.eq(id),
-                decks::language.eq(language),
-              )
-            },
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let look_ahead = executor.look_ahead();
+      let insert = insertable
+        .into_iter()
+        .map(|NewDeck { name, language }| {
+          (
+            decks::name.eq(name),
+            decks::owner.eq(id),
+            decks::language.eq(language),
           )
-          .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
+      let inserted = diesel::insert_into(decks::table)
+        .values(insert)
+        .returning(decks::id)
+        .get_results::<i32>(conn)?;
 
-        let inserted = diesel::insert_into(decks::table)
-          .values(insert)
-          .returning(decks::id)
-          .get_results::<i32>(conn)?;
-
-        let query = <Deck as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(decks::id.eq_any(inserted));
-        let items = Deck::load(&look_ahead, selection, executor, query)?;
-        Ok(Value::list(items))
-      }
-      None => Err(FieldError::new(
-        "You must be logged in to create decks.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+      let query = <Deck as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(decks::id.eq_any(inserted));
+      let items = Deck::load(&look_ahead, selection, executor, query)?;
+      Ok(Value::list(items))
     })
   }
 }
@@ -120,39 +100,27 @@ impl HandleUpdate<Deck, DeckChangeset, Pg, GQLContext<DBConnection>> for decks::
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let owner_id = decks::table
-          .select(decks::owner)
-          .filter(decks::id.eq(update.id))
-          .get_result::<i32>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let owner_id = decks::table
+        .select(decks::owner)
+        .filter(decks::id.eq(update.id))
+        .get_result::<i32>(conn)?;
 
-        if id != owner_id {
-          return Err(FieldError::new(
-            "Updating other users' decks is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        };
+      if id != owner_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
+      };
 
-        diesel::update(decks::table.filter(decks::id.eq(update.id)))
-          .set(decks::name.eq(&update.name))
-          .execute(conn)?;
+      diesel::update(decks::table.filter(decks::id.eq(update.id)))
+        .set(decks::name.eq(&update.name))
+        .execute(conn)?;
 
-        let look_ahead = executor.look_ahead();
+      let look_ahead = executor.look_ahead();
 
-        let query = <Deck as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(decks::id.eq(update.id));
-        let items = Deck::load(&look_ahead, selection, executor, query)?;
-        Ok(items.into_iter().next().unwrap_or(Value::Null))
-      }
-      None => Err(FieldError::new(
-        "You must be logged in to update a deck.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+      let query = <Deck as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(decks::id.eq(update.id));
+      let items = Deck::load(&look_ahead, selection, executor, query)?;
+      Ok(items.into_iter().next().unwrap_or(Value::Null))
     })
   }
 }
@@ -169,36 +137,24 @@ impl HandleDelete<Deck, DeckDeleteset, Pg, GQLContext<DBConnection>> for decks::
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let target_user_id = decks::table
-          .select(decks::owner)
-          .filter(decks::id.eq(to_delete.id))
-          .get_result::<i32>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let target_user_id = decks::table
+        .select(decks::owner)
+        .filter(decks::id.eq(to_delete.id))
+        .get_result::<i32>(conn)?;
 
-        if id != target_user_id {
-          return Err(FieldError::new(
-            "Deleting other users' decks is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        };
+      if id != target_user_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
+      };
 
-        let d = diesel::delete(users::table.filter(users::id.eq(to_delete.id)));
-        executor.resolve_with_ctx(
-          &(),
-          &DeletedCount {
-            count: d.execute(conn)? as _,
-          },
-        )
-      }
-      None => Err(FieldError::new(
-        "You must be logged in to delete a deck.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+      let d = diesel::delete(users::table.filter(users::id.eq(to_delete.id)));
+      executor.resolve_with_ctx(
+        &(),
+        &DeletedCount {
+          count: d.execute(conn)? as _,
+        },
+      )
     })
   }
 }
