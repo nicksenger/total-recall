@@ -39,16 +39,11 @@ pub async fn graphql(
 ) -> Result<HttpResponse, Error> {
   let conn = st.get_ref().pool.get()?;
 
-  let user_id = match req.headers().get("Authorization") {
-    Some(header) => match header.to_str() {
-      Ok(auth) => match verify_jwt(String::from(auth)) {
-        Ok(t) => Some(t.claims.user_id),
-        Err(_) => None,
-      },
-      Err(_) => None,
-    },
-    None => None,
-  };
+  let user_id = req.headers().get("Authorization").and_then(|header| {
+    let auth_string = header.to_str().ok()?;
+    let t = verify_jwt(String::from(auth_string)).ok()?;
+    Some(t.claims.user_id)
+  });
 
   let ctx = GQLContext::new(conn, user_id);
   let res = data.execute(&st.get_ref().schema, &ctx);
@@ -64,32 +59,24 @@ pub async fn login(
   st: Data<AppState>,
 ) -> Result<HttpResponse, Error> {
   let conn = st.get_ref().pool.get()?;
-  let err = Ok(
-    HttpResponse::Unauthorized()
-      .content_type("application/json")
-      .body(json!({ "error": "Login failed" })),
-  );
-  match users::table
+
+  let (id, password) = users::table
     .select((users::id, users::password))
     .filter(users::username.eq(attempt.username))
-    .get_result::<(i32, String)>(&conn)
-  {
-    Ok((id, password)) => match verify(attempt.password, &password) {
-      Ok(valid) => {
-        if !valid {
-          return err;
-        }
-        match encode_jwt(id, 30) {
-          Ok(t) => Ok(
-            HttpResponse::Ok()
-              .content_type("application/json")
-              .body(json!({ "token": t, "user_id": id })),
-          ),
-          Err(_) => err,
-        }
-      }
-      Err(_) => err,
-    },
-    Err(_) => err,
+    .get_result::<(i32, String)>(&conn)?;
+  let valid = verify(attempt.password, &password)?;
+  if !valid {
+    return Ok(
+      HttpResponse::Unauthorized()
+        .content_type("application/json")
+        .body(json!({ "error": "Login failed" })),
+    );
   }
+
+  let t = encode_jwt(id, 30)?;
+  Ok(
+    HttpResponse::Ok()
+      .content_type("application/json")
+      .body(json!({ "token": t, "user_id": id })),
+  )
 }

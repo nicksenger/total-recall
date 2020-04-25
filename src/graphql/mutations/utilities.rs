@@ -5,50 +5,11 @@ use select::{
   predicate::{And, Attr, Name},
 };
 use std::{
-  error, fmt,
   fs::{create_dir, File},
   io::copy,
   path::Path,
 };
-
-#[derive(Debug)]
-pub enum TRCError {
-  Request(reqwest::Error),
-  FileSystem(std::io::Error),
-  Unknown(String),
-}
-
-impl fmt::Display for TRCError {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    match *self {
-      TRCError::Request(ref err) => write!(f, "Request error: {}", err),
-      TRCError::FileSystem(ref err) => write!(f, "File system error: {}", err),
-      TRCError::Unknown(ref err) => write!(f, "Unknown error: {}", err),
-    }
-  }
-}
-
-impl error::Error for TRCError {
-  fn cause(&self) -> Option<&(dyn error::Error)> {
-    match *self {
-      TRCError::Request(ref err) => Some(err),
-      TRCError::FileSystem(ref err) => Some(err),
-      _ => None,
-    }
-  }
-}
-
-impl From<std::io::Error> for TRCError {
-  fn from(err: std::io::Error) -> TRCError {
-    TRCError::FileSystem(err)
-  }
-}
-
-impl From<reqwest::Error> for TRCError {
-  fn from(err: reqwest::Error) -> TRCError {
-    TRCError::Request(err)
-  }
-}
+use crate::TRCError;
 
 pub fn get_image_from_google(
   language_abbr: &str,

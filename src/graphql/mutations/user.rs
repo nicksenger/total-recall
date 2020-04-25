@@ -14,6 +14,7 @@ use wundergraph::{
 use crate::{
   db::{schema::users, DBConnection},
   graphql::{query::User, GQLContext},
+  TRCError,
 };
 
 #[derive(Debug, GraphQLInputObject)]
@@ -101,42 +102,30 @@ impl HandleUpdate<User, UserChangeset, Pg, GQLContext<DBConnection>> for users::
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let target_user_id = users::table
-          .select(users::id)
-          .filter(users::id.eq(update.id))
-          .get_result::<i32>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let target_user_id = users::table
+        .select(users::id)
+        .filter(users::id.eq(update.id))
+        .get_result::<i32>(conn)?;
 
-        if id != target_user_id {
-          return Err(FieldError::new(
-            "Changing other users' passwords is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        };
+      if id != target_user_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
+      };
 
-        let hashed = hash(&update.password, 10)?;
-        let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+      let hashed = hash(&update.password, 10)?;
+      let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
 
-        diesel::update(users::table.filter(users::id.eq(update.id)))
-          .set((users::password.eq(&hashed), users::updated_at.eq(time)))
-          .execute(conn)?;
+      diesel::update(users::table.filter(users::id.eq(update.id)))
+        .set((users::password.eq(&hashed), users::updated_at.eq(time)))
+        .execute(conn)?;
 
-        let look_ahead = executor.look_ahead();
+      let look_ahead = executor.look_ahead();
 
-        let query = <User as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(users::id.eq(id));
-        let items = User::load(&look_ahead, selection, executor, query)?;
-        Ok(items.into_iter().next().unwrap_or(Value::Null))
-      }
-      None => Err(FieldError::new(
-        "You must be logged in to change your password.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+      let query = <User as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(users::id.eq(id));
+      let items = User::load(&look_ahead, selection, executor, query)?;
+      Ok(items.into_iter().next().unwrap_or(Value::Null))
     })
   }
 }
@@ -153,36 +142,24 @@ impl HandleDelete<User, UserDeleteset, Pg, GQLContext<DBConnection>> for users::
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let target_user_id = users::table
-          .select(users::id)
-          .filter(users::id.eq(to_delete.id))
-          .get_result::<i32>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let target_user_id = users::table
+        .select(users::id)
+        .filter(users::id.eq(to_delete.id))
+        .get_result::<i32>(conn)?;
 
-        if id != target_user_id {
-          return Err(FieldError::new(
-            "Deleting other users is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        };
+      if id != target_user_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
+      };
 
-        let d = diesel::delete(users::table.filter(users::id.eq(to_delete.id)));
-        executor.resolve_with_ctx(
-          &(),
-          &DeletedCount {
-            count: d.execute(conn)? as _,
-          },
-        )
-      }
-      None => Err(FieldError::new(
-        "You must be logged in to close your account.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+      let d = diesel::delete(users::table.filter(users::id.eq(to_delete.id)));
+      executor.resolve_with_ctx(
+        &(),
+        &DeletedCount {
+          count: d.execute(conn)? as _,
+        },
+      )
     })
   }
 }

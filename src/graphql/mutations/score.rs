@@ -19,6 +19,7 @@ use crate::{
     query::{Score, ScoreValue},
     GQLContext,
   },
+  TRCError,
 };
 
 #[derive(GraphQLInputObject, Clone, Debug)]
@@ -35,44 +36,32 @@ impl HandleInsert<Score, NewScore, Pg, GQLContext<DBConnection>> for scores::tab
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let target_user_id = cards::table
-          .filter(cards::id.eq(insertable.card))
-          .inner_join(decks::table)
-          .select(decks::owner)
-          .get_result::<i32>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let target_user_id = cards::table
+        .filter(cards::id.eq(insertable.card))
+        .inner_join(decks::table)
+        .select(decks::owner)
+        .get_result::<i32>(conn)?;
 
-        if id != target_user_id {
-          return Err(FieldError::new(
-            "Studying other users' cards is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        }
-        let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
-        let look_ahead = executor.look_ahead();
-        let inserted = diesel::insert_into(scores::table)
-          .values((
-            scores::card.eq(insertable.card),
-            scores::value.eq(insertable.value),
-            scores::created_at.eq(time),
-          ))
-          .returning(scores::id)
-          .get_result::<i32>(conn)?;
-
-        let query = <Score as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(scores::id.eq(inserted));
-        let items = Score::load(&look_ahead, selection, executor, query)?;
-        Ok(items.into_iter().next().unwrap_or(Value::Null))
+      if id != target_user_id {
+        return ExecutionResult::from(TRCError::Unauthorized);
       }
-      None => Err(FieldError::new(
-        "You must be logged in to study.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+      let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+      let look_ahead = executor.look_ahead();
+      let inserted = diesel::insert_into(scores::table)
+        .values((
+          scores::card.eq(insertable.card),
+          scores::value.eq(insertable.value),
+          scores::created_at.eq(time),
+        ))
+        .returning(scores::id)
+        .get_result::<i32>(conn)?;
+
+      let query = <Score as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(scores::id.eq(inserted));
+      let items = Score::load(&look_ahead, selection, executor, query)?;
+      Ok(items.into_iter().next().unwrap_or(Value::Null))
     })
   }
 }
@@ -85,60 +74,47 @@ impl HandleBatchInsert<Score, NewScore, Pg, GQLContext<DBConnection>> for scores
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let look_ahead = executor.look_ahead();
-
-        let mut card_ids = vec![];
-        for score in &insertable {
-          card_ids.push(score.card);
-        }
-
-        let target_ids = cards::table
-          .filter(cards::id.eq_any(card_ids))
-          .inner_join(decks::table)
-          .select(decks::owner)
-          .get_results::<i32>(conn)?;
-
-        for target_id in target_ids {
-          if id != target_id {
-            return Err(FieldError::new(
-              "Submitting scores for other users' cards is forbidden.",
-              graphql_value!({
-                  "type": "UNAUTHORIZED"
-              }),
-            ));
-          }
-        }
-
-        let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
-        let insert = insertable
-          .into_iter()
-          .map(|NewScore { card, value }| {
-            (
-              scores::card.eq(card),
-              scores::value.eq(value),
-              scores::created_at.eq(time),
-            )
-          })
-          .collect::<Vec<_>>();
-
-        let inserted = diesel::insert_into(scores::table)
-          .values(insert)
-          .returning(scores::id)
-          .get_results::<i32>(conn)?;
-
-        let query = <Score as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(scores::id.eq_any(inserted));
-        let items = Score::load(&look_ahead, selection, executor, query)?;
-        Ok(Value::list(items))
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let look_ahead = executor.look_ahead();
+      let mut card_ids = vec![];
+      for score in &insertable {
+        card_ids.push(score.card);
       }
-      None => Err(FieldError::new(
-        "You must be logged in to create cards.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+
+      let target_ids = cards::table
+        .filter(cards::id.eq_any(card_ids))
+        .inner_join(decks::table)
+        .select(decks::owner)
+        .get_results::<i32>(conn)?;
+
+      for target_id in target_ids {
+        if id != target_id {
+          return ExecutionResult::from(TRCError::Unauthorized);
+        }
+      }
+
+      let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+      let insert = insertable
+        .into_iter()
+        .map(|NewScore { card, value }| {
+          (
+            scores::card.eq(card),
+            scores::value.eq(value),
+            scores::created_at.eq(time),
+          )
+        })
+        .collect::<Vec<_>>();
+
+      let inserted = diesel::insert_into(scores::table)
+        .values(insert)
+        .returning(scores::id)
+        .get_results::<i32>(conn)?;
+
+      let query = <Score as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(scores::id.eq_any(inserted));
+      let items = Score::load(&look_ahead, selection, executor, query)?;
+      Ok(Value::list(items))
     })
   }
 }
@@ -157,40 +133,28 @@ impl HandleUpdate<Score, ScoreChangeset, Pg, GQLContext<DBConnection>> for score
   ) -> ExecutionResult<WundergraphScalarValue> {
     let ctx = executor.context();
     let conn = ctx.get_connection();
-    conn.transaction(|| match ctx.user_id {
-      Some(id) => {
-        let owner_id = scores::table
-          .filter(scores::id.eq(update.id))
-          .inner_join(cards::table.inner_join(decks::table))
-          .select(decks::owner)
-          .get_result::<i32>(conn)?;
+    conn.transaction(|| {
+      let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
+      let owner_id = scores::table
+        .filter(scores::id.eq(update.id))
+        .inner_join(cards::table.inner_join(decks::table))
+        .select(decks::owner)
+        .get_result::<i32>(conn)?;
 
-        if id != owner_id {
-          return Err(FieldError::new(
-            "Updating other users' scores is forbidden.",
-            graphql_value!({
-                "type": "UNAUTHORIZED"
-            }),
-          ));
-        };
+      if id != owner_id {
+        return ExecutionResult::from(TRCError.Unauthorized);
+      };
 
-        diesel::update(scores::table.filter(scores::id.eq(update.id)))
-          .set(scores::value.eq(update.value))
-          .execute(conn)?;
+      diesel::update(scores::table.filter(scores::id.eq(update.id)))
+        .set(scores::value.eq(update.value))
+        .execute(conn)?;
 
-        let look_ahead = executor.look_ahead();
+      let look_ahead = executor.look_ahead();
 
-        let query = <Score as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
-          .filter(scores::id.eq(update.id));
-        let items = Score::load(&look_ahead, selection, executor, query)?;
-        Ok(items.into_iter().next().unwrap_or(Value::Null))
-      }
-      None => Err(FieldError::new(
-        "You must be logged in to update a score.",
-        graphql_value!({
-            "type": "UNAUTHORIZED"
-        }),
-      )),
+      let query = <Score as LoadingHandler<_, PgConnection>>::build_query(&[], &look_ahead)?
+        .filter(scores::id.eq(update.id));
+      let items = Score::load(&look_ahead, selection, executor, query)?;
+      Ok(items.into_iter().next().unwrap_or(Value::Null))
     })
   }
 }
