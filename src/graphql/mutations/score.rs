@@ -142,7 +142,7 @@ impl HandleUpdate<Score, ScoreChangeset, Pg, GQLContext<DBConnection>> for score
         .get_result::<i32>(conn)?;
 
       if id != owner_id {
-        return ExecutionResult::from(TRCError.Unauthorized);
+        return ExecutionResult::from(TRCError::Unauthorized);
       };
 
       diesel::update(scores::table.filter(scores::id.eq(update.id)))
