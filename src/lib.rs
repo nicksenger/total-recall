@@ -66,3 +66,6 @@ impl From<TRCError> for ExecutionResult<WundergraphScalarValue> {
     ))
   }
 }
+
+#[cfg(test)]
+mod test;
