@@ -10,10 +10,7 @@ use wundergraph::{
 };
 
 use crate::{
-  db::{
-    schema::{decks, users},
-    DBConnection,
-  },
+  db::{schema::decks, DBConnection},
   graphql::{query::Deck, GQLContext},
   TRCError,
 };
@@ -148,7 +145,7 @@ impl HandleDelete<Deck, DeckDeleteset, Pg, GQLContext<DBConnection>> for decks::
         return ExecutionResult::from(TRCError::Unauthorized);
       };
 
-      let d = diesel::delete(users::table.filter(users::id.eq(to_delete.id)));
+      let d = diesel::delete(decks::table.filter(decks::id.eq(to_delete.id)));
       executor.resolve_with_ctx(
         &(),
         &DeletedCount {

@@ -143,7 +143,7 @@ mod tests {
     assert!(resp.status().is_success(), "Failed to delete deck");
     assert_eq!(
       from_utf8(&test::read_body(resp).await).unwrap(),
-      "{\"data\":{\"DeleteDeck\":{\"count\":0}}}"
+      "{\"data\":{\"DeleteDeck\":{\"count\":1}}}"
     );
   }
 }
