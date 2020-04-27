@@ -2764,7 +2764,6 @@ dependencies = [
  "google_translate_tts",
  "jsonwebtoken",
  "juniper",
- "lazy_static",
  "reqwest",
  "sanitize-filename",
  "select",
