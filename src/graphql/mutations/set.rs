@@ -147,16 +147,11 @@ impl HandleUpdate<Set, SetChangeset, Pg, GQLContext<DBConnection>> for sets::tab
       let id = ctx.user_id.ok_or(TRCError::Unauthorized)?;
       let owner_id = sets::table
         .filter(sets::id.eq(update.id))
-        .select(sets::id)
+        .select(sets::owner)
         .get_result::<i32>(conn)?;
 
       if id != owner_id {
-        return Err(FieldError::new(
-          "Updating other users' sets is forbidden.",
-          graphql_value!({
-              "type": "UNAUTHORIZED"
-          }),
-        ));
+        return ExecutionResult::from(TRCError::Unauthorized);
       };
 
       diesel::update(sets::table.filter(sets::id.eq(update.id)))
