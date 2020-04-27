@@ -3,6 +3,7 @@ use diesel::{
   r2d2::{ConnectionManager, Pool},
 };
 use dotenv::dotenv;
+use serde::Deserialize;
 use std::{env, sync::Arc};
 
 use crate::{
@@ -11,8 +12,81 @@ use crate::{
   service::AppState,
 };
 
-mod user;
+mod card;
 mod deck;
+mod score;
+mod set;
+mod user;
+
+#[derive(Deserialize)]
+struct LoginResponse {
+  token: String,
+  user_id: i32,
+}
+
+#[derive(Deserialize)]
+struct CreateDeckInfo {
+  id: i32,
+}
+
+#[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct CreateDeckData {
+  CreateDeck: CreateDeckInfo,
+}
+
+#[derive(Deserialize)]
+struct CreateDeckResponse {
+  data: CreateDeckData,
+}
+
+#[derive(Deserialize)]
+struct CreateCardInfo {
+  id: i32,
+}
+
+#[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct CreateCardData {
+  CreateCard: CreateCardInfo,
+}
+
+#[derive(Deserialize)]
+struct CreateCardResponse {
+  data: CreateCardData,
+}
+
+#[derive(Deserialize)]
+struct CreateSetInfo {
+  id: i32,
+}
+
+#[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct CreateSetData {
+  CreateSet: CreateSetInfo,
+}
+
+#[derive(Deserialize)]
+struct CreateSetResponse {
+  data: CreateSetData,
+}
+
+#[derive(Deserialize)]
+struct CreateScoreInfo {
+  id: i32,
+}
+
+#[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct CreateScoreData {
+  CreateScore: CreateScoreInfo,
+}
+
+#[derive(Deserialize)]
+struct CreateScoreResponse {
+  data: CreateScoreData,
+}
 
 #[cfg(test)]
 pub fn init() -> AppState {

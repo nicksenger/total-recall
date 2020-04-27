@@ -12,10 +12,10 @@ mod tests {
   use serde_json::{self, json};
   use std::str::from_utf8;
 
-  use crate::test::{CreateDeckResponse, LoginResponse};
+  use crate::test::{CreateCardResponse, CreateDeckResponse, LoginResponse};
 
   #[actix_rt::test]
-  async fn test_deck() {
+  async fn test_card() {
     let data = init();
 
     let mut app = test::init_service(
@@ -65,7 +65,6 @@ mod tests {
         "query": "mutation CreateDeck($name: String!, $language: Int!) {
           CreateDeck(NewDeck: { name: $name, language: $language }) {
             id
-            name
           }
         }",
         "variables": {
@@ -81,69 +80,93 @@ mod tests {
 
     let body = test::read_body(resp).await;
     let body = from_utf8(&body).unwrap();
-    let create_response: CreateDeckResponse = serde_json::from_str(&body).unwrap();
+    let create_deck_response: CreateDeckResponse = serde_json::from_str(&body).unwrap();
 
     let req = TestRequest::post()
       .uri("/graphql")
       .set_json(&json!({
-        "query": "mutation UpdateDeck($id: Int!, $name: String!) {
-          UpdateDeck(UpdateDeck: { name: $name, id: $id }) {
-            name
+        "query": "mutation CreateCard($front: String!, $back: String!, $deck: Int!) {
+          CreateCard(NewCard: { deck: $deck, front: $front, back: $back }) {
+            id
           }
         }",
         "variables": {
-          "name": "changed_name",
-          "id": create_response.data.CreateDeck.id,
+          "front": "foo",
+          "back": "bar",
+          "deck": create_deck_response.data.CreateDeck.id,
         },
       }))
       .header("Authorization", login_response.token.clone())
       .to_request();
     let resp = test::call_service(&mut app, req).await;
 
-    assert!(resp.status().is_success(), "Failed to update deck");
+    assert!(resp.status().is_success(), "Failed to create card");
+
+    let body = test::read_body(resp).await;
+    let body = from_utf8(&body).unwrap();
+    let create_card_response: CreateCardResponse = serde_json::from_str(&body).unwrap();
 
     let req = TestRequest::post()
       .uri("/graphql")
       .set_json(&json!({
-        "query": "query GetDeck($id: Int!) {
-          Deck(primaryKey: { id: $id }) {
-            name
+        "query": "mutation UpdateCard($id: Int!, $link: String!) {
+          UpdateCard(UpdateCard: { id: $id, link: $link }) {
+            link
           }
         }",
         "variables": {
-          "id": create_response.data.CreateDeck.id,
+          "id": create_card_response.data.CreateCard.id,
+          "link": "http://foo.com/bar/baz"
         },
       }))
       .header("Authorization", login_response.token.clone())
       .to_request();
     let resp = test::call_service(&mut app, req).await;
 
-    assert!(resp.status().is_success(), "Failed to read deck");
+    assert!(resp.status().is_success(), "Failed to update card");
+
+    let req = TestRequest::post()
+      .uri("/graphql")
+      .set_json(&json!({
+        "query": "query GetCard($id: Int!) {
+          Card(primaryKey: { id: $id }) {
+            link
+          }
+        }",
+        "variables": {
+          "id": create_card_response.data.CreateCard.id,
+        },
+      }))
+      .header("Authorization", login_response.token.clone())
+      .to_request();
+    let resp = test::call_service(&mut app, req).await;
+
+    assert!(resp.status().is_success(), "Failed to read card");
     assert_eq!(
       from_utf8(&test::read_body(resp).await).unwrap(),
-      "{\"data\":{\"Deck\":{\"name\":\"changed_name\"}}}"
+      "{\"data\":{\"Card\":{\"link\":\"http://foo.com/bar/baz\"}}}"
     );
 
     let req = TestRequest::post()
       .uri("/graphql")
       .set_json(&json!({
-        "query": "mutation DeleteDeck($id: Int!) {
-          DeleteDeck(DeleteDeck: { id: $id }) {
+        "query": "mutation DeleteCard($id: Int!) {
+          DeleteCard(DeleteCard: { id: $id }) {
             count
           }
         }",
         "variables": {
-          "id": &create_response.data.CreateDeck.id,
+          "id": &create_card_response.data.CreateCard.id,
         },
       }))
       .header("Authorization", login_response.token)
       .to_request();
     let resp = test::call_service(&mut app, req).await;
 
-    assert!(resp.status().is_success(), "Failed to delete deck");
+    assert!(resp.status().is_success(), "Failed to delete card");
     assert_eq!(
       from_utf8(&test::read_body(resp).await).unwrap(),
-      "{\"data\":{\"DeleteDeck\":{\"count\":0}}}"
+      "{\"data\":{\"DeleteCard\":{\"count\":1}}}"
     );
   }
 }

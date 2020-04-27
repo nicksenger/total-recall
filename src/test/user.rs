@@ -9,15 +9,10 @@ mod tests {
     web::post,
     App,
   };
-  use serde::Deserialize;
   use serde_json::{self, json};
   use std::str::from_utf8;
 
-  #[derive(Deserialize)]
-  struct LoginResponse {
-    token: String,
-    user_id: i32,
-  }
+  use crate::test::LoginResponse;
 
   #[actix_rt::test]
   async fn test_user() {
