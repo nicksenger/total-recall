@@ -36,7 +36,7 @@ struct Opt {
 async fn index(req: HttpRequest) -> Result<NamedFile> {
     let mut path = req.match_info().query("path").split("/").peekable();
     match path.peek() {
-        Some(&"login") | Some(&"register") | Some(&"manual") | Some(&"study") | Some(&"cards")
+        Some(&"") | Some(&"login") | Some(&"register") | Some(&"manual") | Some(&"study") | Some(&"cards")
         | Some(&"sets") | Some(&"user") | None => Ok(NamedFile::open::<PathBuf>(
             "./static/index.html".parse().unwrap(),
         )?),
@@ -76,7 +76,7 @@ async fn main() -> std::io::Result<()> {
             .route("/login", post().to(login))
             .route("/graphql", post().to(graphql))
             .route("/graphiql", get().to(graphiql))
-            .route("/{path:.*}", get().to(index))
+            .route("{path:.*}", get().to(index))
     })
     .bind(&url)
     .expect("Failed to start Total Recall")
