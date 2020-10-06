@@ -1,13 +1,18 @@
 extern crate total_recall;
 
-use actix_files::Files;
+use std::{
+    io::Result,
+    path::PathBuf,
+    sync::Arc,
+};
+
+use actix_files::NamedFile;
 use actix_web::{
     middleware::Logger,
     web::{get, post},
-    App, HttpServer,
+    App, HttpRequest, HttpServer,
 };
 use diesel::r2d2::{ConnectionManager, Pool};
-use std::sync::Arc;
 use structopt::StructOpt;
 
 use total_recall::{
@@ -26,6 +31,21 @@ struct Opt {
     database_url: String,
     #[structopt(short = "s", long = "socket", default_value = "127.0.0.1:8000")]
     socket: String,
+}
+
+async fn index(req: HttpRequest) -> Result<NamedFile> {
+    let mut path = req.match_info().query("path").split("/").peekable();
+    match path.peek() {
+        Some(&"login") | Some(&"register") | Some(&"manual") | Some(&"study") | Some(&"cards")
+        | Some(&"sets") | Some(&"user") | None => Ok(NamedFile::open::<PathBuf>(
+            "./static/index.html".parse().unwrap(),
+        )?),
+        Some(_) => Ok(NamedFile::open::<PathBuf>(
+            format!("./static/{}", path.collect::<Vec<&str>>().join("/"))
+                .parse()
+                .unwrap(),
+        )?),
+    }
 }
 
 #[actix_rt::main]
@@ -56,7 +76,7 @@ async fn main() -> std::io::Result<()> {
             .route("/login", post().to(login))
             .route("/graphql", post().to(graphql))
             .route("/graphiql", get().to(graphiql))
-            .service(Files::new("/", "./static").index_file("index.html"))
+            .route("/{path:.*}", get().to(index))
     })
     .bind(&url)
     .expect("Failed to start Total Recall")
